@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.2] - 2026-03-02
+
+### Added
+
+- 🎨 **Terminal color support** — terminal sessions now set the `TERM` environment variable (default `xterm-256color`) so programs emit ANSI color codes. Configurable via `OPEN_TERMINAL_TERM` environment variable or `term` in config.toml.
+
 ## [0.8.1] - 2026-03-02
 
 ### Added

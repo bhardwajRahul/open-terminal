@@ -1,5 +1,5 @@
 import asyncio
-
+from importlib.metadata import version as _pkg_version
 import fnmatch
 import json
 
@@ -24,7 +24,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
-from open_terminal.env import API_KEY, BINARY_FILE_MIME_PREFIXES, CORS_ALLOWED_ORIGINS, ENABLE_TERMINAL, LOG_DIR, MAX_TERMINAL_SESSIONS
+from open_terminal.env import API_KEY, BINARY_FILE_MIME_PREFIXES, CORS_ALLOWED_ORIGINS, ENABLE_TERMINAL, LOG_DIR, MAX_TERMINAL_SESSIONS, TERMINAL_TERM
 from open_terminal.runner import PipeRunner, ProcessRunner, create_runner
 
 try:
@@ -69,7 +69,7 @@ async def verify_api_key(
 app = FastAPI(
     title="Open Terminal",
     description="A remote terminal API.",
-    version="0.8.1",
+    version=_pkg_version("open-terminal"),
 )
 app.add_middleware(
     CORSMiddleware,
@@ -1223,13 +1223,15 @@ if ENABLE_TERMINAL:
                 fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 
                 shell = os.environ.get("SHELL", "/bin/sh")
+                spawn_env = os.environ.copy()
+                spawn_env.setdefault("TERM", TERMINAL_TERM)
                 process = subprocess.Popen(
                     [shell],
                     stdin=slave_fd,
                     stdout=slave_fd,
                     stderr=slave_fd,
                     cwd=os.getcwd(),
-                    env=os.environ.copy(),
+                    env=spawn_env,
                     start_new_session=True,
                 )
             except Exception:
@@ -1252,10 +1254,12 @@ if ENABLE_TERMINAL:
 
         else:  # winpty
             shell = os.environ.get("COMSPEC", "cmd.exe")
+            spawn_env = os.environ.copy()
+            spawn_env.setdefault("TERM", TERMINAL_TERM)
             pty_proc = _WinPtyProcess.spawn(
                 [shell],
                 cwd=os.getcwd(),
-                env=os.environ.copy(),
+                env=spawn_env,
                 dimensions=(24, 80),
             )
             _terminal_sessions[session_id] = {

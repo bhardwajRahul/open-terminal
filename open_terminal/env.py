@@ -70,3 +70,8 @@ ENABLE_TERMINAL = os.environ.get(
     "OPEN_TERMINAL_ENABLE_TERMINAL",
     str(config.get("enable_terminal", True)),
 ).lower() not in ("false", "0", "no")
+
+TERMINAL_TERM = os.environ.get(
+    "OPEN_TERMINAL_TERM",
+    config.get("term", "xterm-256color"),
+)
