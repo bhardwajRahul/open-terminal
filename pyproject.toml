@@ -1,6 +1,6 @@
 [project]
 name = "open-terminal"
-version = "0.9.3"
+version = "0.10.0"
 description = "A remote terminal API."
 readme = "README.md"
 authors = [
@@ -15,12 +15,13 @@ dependencies = [
     "python-multipart>=0.0.22",
     "aiofiles>=25.1.0",
     "pypdf>=5.0.0",
+    "nbclient>=0.10.0",
+    "ipykernel>=6.0.0",
     "pywinpty>=2.0.0; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
 mcp = ["fastmcp>=2.0.0"]
-notebooks = ["nbclient>=0.10.0", "ipykernel>=6.0.0"]
 
 [project.scripts]
 open-terminal = "open_terminal.cli:main"

@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.0] - 2026-03-05
+
+### Added
+
+- 📓 **Notebook execution** (`/notebooks`) — multi-session Jupyter notebook execution via REST endpoints. Each session gets its own kernel via `nbclient`. Supports per-cell execution with rich outputs (images, HTML, LaTeX). `nbclient` and `ipykernel` are now core dependencies.
+- ⚙️ **`OPEN_TERMINAL_ENABLE_NOTEBOOKS`** — environment variable (or `enable_notebooks` in config.toml) to enable/disable notebook execution endpoints. Defaults to `true`. Exposed in `GET /api/config` features.
+
 ## [0.9.3] - 2026-03-05
 
 ### Added

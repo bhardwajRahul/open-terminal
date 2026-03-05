@@ -88,3 +88,8 @@ EXECUTE_DESCRIPTION = os.environ.get(
     "OPEN_TERMINAL_EXECUTE_DESCRIPTION",
     config.get("execute_description", ""),
 )
+
+ENABLE_NOTEBOOKS = os.environ.get(
+    "OPEN_TERMINAL_ENABLE_NOTEBOOKS",
+    str(config.get("enable_notebooks", True)),
+).lower() not in ("false", "0", "no")

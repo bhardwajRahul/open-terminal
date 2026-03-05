@@ -24,7 +24,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
-from open_terminal.env import API_KEY, BINARY_FILE_MIME_PREFIXES, CORS_ALLOWED_ORIGINS, ENABLE_TERMINAL, EXECUTE_DESCRIPTION, EXECUTE_TIMEOUT, LOG_DIR, MAX_TERMINAL_SESSIONS, TERMINAL_TERM
+from open_terminal.env import API_KEY, BINARY_FILE_MIME_PREFIXES, CORS_ALLOWED_ORIGINS, ENABLE_NOTEBOOKS, ENABLE_TERMINAL, EXECUTE_DESCRIPTION, EXECUTE_TIMEOUT, LOG_DIR, MAX_TERMINAL_SESSIONS, TERMINAL_TERM
 from open_terminal.runner import PipeRunner, ProcessRunner, create_runner
 
 try:
@@ -343,6 +343,7 @@ async def get_config():
     return {
         "features": {
             "terminal": ENABLE_TERMINAL,
+            "notebooks": ENABLE_NOTEBOOKS,
         },
     }
 
@@ -1576,4 +1577,14 @@ if ENABLE_TERMINAL:
                 pass
             # Clean up session on disconnect
             _cleanup_session(session_id)
+
+
+# ---------------------------------------------------------------------------
+# Notebook execution (optional)
+# ---------------------------------------------------------------------------
+
+if ENABLE_NOTEBOOKS:
+    from open_terminal.notebooks import create_notebooks_router
+
+    app.include_router(create_notebooks_router(verify_api_key))
 
