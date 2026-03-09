@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.2] - 2026-03-09
+
+### Changed
+
+- ♻️ **Native Python I/O for multi-user reads** — replaced subprocess-based file reads (`cat`, `find -printf`, `stat -c`, `test`) with native `aiofiles`/`os` calls. Home directories now use `chmod 750` with group membership so the server can read directly. Writes still use `sudo -u` for correct ownership. Cross-user isolation preserved via Unix group permissions.
+- 🐳 **Dockerfile** — grants `CAP_SETGID` to the Python binary via `setcap` so the server can refresh supplementary groups at runtime when provisioning new users.
+
 ## [0.11.1] - 2026-03-09
 
 ### Fixed
