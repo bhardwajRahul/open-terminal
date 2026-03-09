@@ -26,12 +26,10 @@ from pypdf import PdfReader
 
 from open_terminal.env import API_KEY, BINARY_FILE_MIME_PREFIXES, CORS_ALLOWED_ORIGINS, ENABLE_NOTEBOOKS, ENABLE_TERMINAL, EXECUTE_DESCRIPTION, EXECUTE_TIMEOUT, LOG_DIR, MAX_TERMINAL_SESSIONS, MULTI_USER, TERMINAL_TERM
 from open_terminal.runner import PipeRunner, ProcessRunner, create_runner
+from open_terminal.utils.fs import UserFS
 
 if MULTI_USER:
-    from open_terminal.user_isolation import (
-        check_environment, resolve_user,
-        sudo_list_dir, sudo_mkdir, sudo_mv, sudo_read_file, sudo_rm, sudo_write_file,
-    )
+    from open_terminal.user_isolation import check_environment, resolve_user
     check_environment()
 
 try:
@@ -75,19 +73,20 @@ async def verify_api_key(
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
-def get_user_context(request: Request) -> tuple[str | None, str | None]:
-    """Resolve the OS user context for multi-user mode.
+def get_filesystem(request: Request) -> UserFS:
+    """Build a :class:`UserFS` scoped to the requesting user.
 
-    Reads the ``X-User-Id`` header (set by the OWUI proxy) and provisions
-    a per-user Linux account if needed.  Returns ``(username, home_dir)``
-    when multi-user mode is active, or ``(None, None)`` otherwise.
+    When multi-user mode is active and the ``X-User-Id`` header is present,
+    returns a ``UserFS`` that routes all I/O through ``sudo -u``.
+    Otherwise returns a plain ``UserFS`` using stdlib.
     """
     if not MULTI_USER:
-        return None, None
+        return UserFS()
     user_id = request.headers.get("x-user-id")
     if not user_id:
-        return None, None
-    return resolve_user(user_id)
+        return UserFS()
+    username, home = resolve_user(user_id)
+    return UserFS(username=username, home=home)
 
 
 app = FastAPI(
@@ -380,9 +379,8 @@ async def get_config():
     include_in_schema=False,
     dependencies=[Depends(verify_api_key)],
 )
-async def get_cwd(request: Request):
-    run_as_user, user_home = get_user_context(request)
-    return {"cwd": user_home if run_as_user else os.getcwd()}
+async def get_cwd(fs: UserFS = Depends(get_filesystem)):
+    return {"cwd": fs.home}
 
 
 @app.post(
@@ -390,13 +388,12 @@ async def get_cwd(request: Request):
     include_in_schema=False,
     dependencies=[Depends(verify_api_key)],
 )
-async def set_cwd(http_request: Request, request: MkdirRequest):
-    run_as_user, _ = get_user_context(http_request)
+async def set_cwd(request: MkdirRequest, fs: UserFS = Depends(get_filesystem)):
     target = os.path.abspath(request.path)
-    if run_as_user:
+    if fs.username:
         # In multi-user mode, cwd is per-user; don't touch the global server cwd.
         return {"cwd": target}
-    if not await aiofiles.os.path.isdir(target):
+    if not await fs.isdir(target):
         raise HTTPException(status_code=404, detail="Directory not found")
     try:
         os.chdir(target)
@@ -417,38 +414,13 @@ async def set_cwd(http_request: Request, request: MkdirRequest):
     },
 )
 async def list_files(
-    request: Request,
     directory: str = Query(".", description="Directory path to list."),
+    fs: UserFS = Depends(get_filesystem),
 ):
-    run_as_user, user_home = get_user_context(request)
     target = os.path.abspath(directory)
-
-    if run_as_user:
-        entries = await sudo_list_dir(run_as_user, target)
-        return {"dir": target, "entries": entries}
-
-    if not await aiofiles.os.path.isdir(target):
+    if not await fs.isdir(target):
         raise HTTPException(status_code=404, detail="Directory not found")
-
-    def _list_sync():
-        entries = []
-        for name in sorted(os.listdir(target)):
-            full_path = os.path.join(target, name)
-            try:
-                file_stat = os.stat(full_path)
-                entries.append(
-                    {
-                        "name": name,
-                        "type": "directory" if os.path.isdir(full_path) else "file",
-                        "size": file_stat.st_size,
-                        "modified": file_stat.st_mtime,
-                    }
-                )
-            except OSError:
-                continue
-        return entries
-
-    entries = await asyncio.to_thread(_list_sync)
+    entries = await fs.listdir(target)
     return {"dir": target, "entries": entries}
 
 
@@ -465,7 +437,6 @@ async def list_files(
     },
 )
 async def read_file(
-    request: Request,
     path: str = Query(..., description="Path to the file to read."),
     start_line: Optional[int] = Query(
         None, description="First line to return (1-indexed, inclusive).", ge=1
@@ -473,25 +444,19 @@ async def read_file(
     end_line: Optional[int] = Query(
         None, description="Last line to return (1-indexed, inclusive).", ge=1
     ),
+    fs: UserFS = Depends(get_filesystem),
 ):
-    run_as_user, _ = get_user_context(request)
     target = os.path.abspath(path)
-    if not run_as_user and not await aiofiles.os.path.isfile(target):
+    if not await fs.isfile(target):
         raise HTTPException(status_code=404, detail="File not found")
 
     try:
-        if run_as_user:
-            raw = await sudo_read_file(run_as_user, target)
-            content = raw.decode("utf-8")
-            lines = content.splitlines(keepends=True)
-        else:
-            async with aiofiles.open(target, "r", encoding="utf-8", errors="strict") as f:
-                content = await f.read()
-                lines = content.splitlines(keepends=True)
+        content = await fs.read_text(target)
+        lines = content.splitlines(keepends=True)
     except (UnicodeDecodeError, ValueError):
         import mimetypes
 
-        size = (await aiofiles.os.stat(target)).st_size
+        raw = await fs.read(target)
         mime, _ = mimetypes.guess_type(target)
         mime = mime or "application/octet-stream"
 
@@ -510,14 +475,12 @@ async def read_file(
 
         # Return raw binary for allowed mime type prefixes (e.g. image/*)
         if any(mime.startswith(prefix) for prefix in BINARY_FILE_MIME_PREFIXES):
-            async with aiofiles.open(target, "rb") as f:
-                raw = await f.read()
             return Response(content=raw, media_type=mime)
 
         # Other binary files: reject (LLMs can't interpret raw bytes)
         raise HTTPException(
             status_code=415,
-            detail=f"Unsupported binary file type: {mime} ({size} bytes)",
+            detail=f"Unsupported binary file type: {mime} ({len(raw)} bytes)",
         )
 
     start = (start_line or 1) - 1
@@ -541,6 +504,7 @@ async def read_file(
 )
 async def display_file(
     path: str = Query(..., description="Absolute path to the file to display."),
+    fs: UserFS = Depends(get_filesystem),
 ):
     """Signal that a file should be displayed to the user.
 
@@ -550,7 +514,7 @@ async def display_file(
     opening a preview pane, launching a viewer, etc.).
     """
     target = os.path.abspath(path)
-    exists = await aiofiles.os.path.isfile(target)
+    exists = await fs.isfile(target)
     return {"path": target, "exists": exists}
 
 
@@ -561,6 +525,7 @@ async def display_file(
 )
 async def view_file(
     path: str = Query(..., description="Path to the file to view."),
+    fs: UserFS = Depends(get_filesystem),
 ):
     """Return raw file bytes with the appropriate Content-Type.
 
@@ -568,16 +533,14 @@ async def view_file(
     binary types), this endpoint serves any file as-is for UI previewing.
     """
     target = os.path.abspath(path)
-    if not await aiofiles.os.path.isfile(target):
+    if not await fs.isfile(target):
         raise HTTPException(status_code=404, detail="File not found")
 
     import mimetypes
 
     mime, _ = mimetypes.guess_type(target)
     mime = mime or "application/octet-stream"
-
-    async with aiofiles.open(target, "rb") as f:
-        raw = await f.read()
+    raw = await fs.read(target)
     return Response(content=raw, media_type=mime)
 
 
@@ -591,16 +554,10 @@ async def view_file(
         401: {"description": "Invalid or missing API key."},
     },
 )
-async def write_file(http_request: Request, request: WriteRequest):
-    run_as_user, _ = get_user_context(http_request)
+async def write_file(request: WriteRequest, fs: UserFS = Depends(get_filesystem)):
     target = os.path.abspath(request.path)
     try:
-        if run_as_user:
-            await sudo_write_file(run_as_user, target, request.content)
-        else:
-            await aiofiles.os.makedirs(os.path.dirname(target), exist_ok=True)
-            async with aiofiles.open(target, "w", encoding="utf-8") as f:
-                await f.write(request.content)
+        await fs.write(target, request.content)
     except (OSError, subprocess.CalledProcessError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"path": target, "size": len(request.content.encode())}
@@ -611,14 +568,10 @@ async def write_file(http_request: Request, request: WriteRequest):
     include_in_schema=False,
     dependencies=[Depends(verify_api_key)],
 )
-async def mkdir(http_request: Request, request: MkdirRequest):
-    run_as_user, _ = get_user_context(http_request)
+async def mkdir(request: MkdirRequest, fs: UserFS = Depends(get_filesystem)):
     target = os.path.abspath(request.path)
     try:
-        if run_as_user:
-            await sudo_mkdir(run_as_user, target)
-        else:
-            await aiofiles.os.makedirs(target, exist_ok=True)
+        await fs.mkdir(target)
     except (OSError, subprocess.CalledProcessError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"path": target}
@@ -630,23 +583,15 @@ async def mkdir(http_request: Request, request: MkdirRequest):
     dependencies=[Depends(verify_api_key)],
 )
 async def delete_entry(
-    http_request: Request,
     path: str = Query(..., description="Path to delete."),
+    fs: UserFS = Depends(get_filesystem),
 ):
-    run_as_user, _ = get_user_context(http_request)
     target = os.path.abspath(path)
-    if not await aiofiles.os.path.exists(target):
+    if not await fs.exists(target):
         raise HTTPException(status_code=404, detail="Path not found")
-
-    is_dir = await aiofiles.os.path.isdir(target)
+    is_dir = await fs.isdir(target)
     try:
-        if run_as_user:
-            await sudo_rm(run_as_user, target)
-        else:
-            if is_dir:
-                await asyncio.to_thread(shutil.rmtree, target)
-            else:
-                await aiofiles.os.remove(target)
+        await fs.remove(target)
     except (OSError, subprocess.CalledProcessError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"path": target, "type": "directory" if is_dir else "file"}
@@ -657,26 +602,22 @@ async def delete_entry(
     include_in_schema=False,
     dependencies=[Depends(verify_api_key)],
 )
-async def move_entry(http_request: Request, request: MoveRequest):
-    run_as_user, _ = get_user_context(http_request)
+async def move_entry(request: MoveRequest, fs: UserFS = Depends(get_filesystem)):
     source = os.path.abspath(request.source)
     destination = os.path.abspath(request.destination)
 
-    if not await aiofiles.os.path.exists(source):
+    if not await fs.exists(source):
         raise HTTPException(status_code=404, detail="Source path not found")
 
     dest_parent = os.path.dirname(destination)
-    if not await aiofiles.os.path.isdir(dest_parent):
+    if not await fs.isdir(dest_parent):
         raise HTTPException(status_code=400, detail="Destination parent directory not found")
 
-    if await aiofiles.os.path.exists(destination):
+    if await fs.exists(destination):
         raise HTTPException(status_code=409, detail="Destination already exists")
 
     try:
-        if run_as_user:
-            await sudo_mv(run_as_user, source, destination)
-        else:
-            await asyncio.to_thread(shutil.move, source, destination)
+        await fs.move(source, destination)
     except (OSError, subprocess.CalledProcessError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"source": source, "destination": destination}
@@ -694,14 +635,13 @@ async def move_entry(http_request: Request, request: MoveRequest):
         401: {"description": "Invalid or missing API key."},
     },
 )
-async def replace_file_content(request: ReplaceRequest):
+async def replace_file_content(request: ReplaceRequest, fs: UserFS = Depends(get_filesystem)):
     target = os.path.abspath(request.path)
-    if not await aiofiles.os.path.isfile(target):
+    if not await fs.isfile(target):
         raise HTTPException(status_code=404, detail="File not found")
 
     try:
-        async with aiofiles.open(target, "r", encoding="utf-8", errors="replace") as f:
-            content = await f.read()
+        content = await fs.read_text(target)
     except OSError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -734,8 +674,7 @@ async def replace_file_content(request: ReplaceRequest):
             content = content.replace(chunk.target, chunk.replacement)
 
     try:
-        async with aiofiles.open(target, "w", encoding="utf-8") as f:
-            await f.write(content)
+        await fs.write(target, content)
     except OSError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -958,6 +897,7 @@ async def upload_file(
     file: Optional[UploadFile] = File(
         None, description="The file to upload (if no URL provided)."
     ),
+    fs: UserFS = Depends(get_filesystem),
 ):
     if url:
         import httpx
@@ -977,10 +917,9 @@ async def upload_file(
         )
 
     try:
-        await aiofiles.os.makedirs(directory, exist_ok=True)
+        await fs.mkdir(directory)
         path = os.path.join(directory, filename)
-        async with aiofiles.open(path, "wb") as f:
-            await f.write(content)
+        await fs.write_bytes(path, content)
     except OSError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"path": path, "size": len(content)}
@@ -1042,12 +981,12 @@ async def execute(
         ge=1,
     ),
 ):
-    run_as_user, user_home = get_user_context(http_request)
-    cwd = request.cwd or (user_home if run_as_user else None)
+    fs = get_filesystem(http_request)
+    cwd = request.cwd or (fs.home if fs.username else None)
 
     subprocess_env = {**os.environ, **request.env} if request.env else None
     runner = await create_runner(
-        request.command, cwd, subprocess_env, run_as_user=run_as_user
+        request.command, cwd, subprocess_env, run_as_user=fs.username
     )
 
     process_id = uuid.uuid4().hex[:12]
@@ -1388,9 +1327,9 @@ if ENABLE_TERMINAL:
             try:
                 fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 
-                run_as_user, user_home = get_user_context(request)
-                if run_as_user:
-                    shell_cmd = ["sudo", "-u", run_as_user, "--", "/bin/bash"]
+                fs = get_filesystem(request)
+                if fs.username:
+                    shell_cmd = ["sudo", "-u", fs.username, "--", "/bin/bash"]
                     cwd = None  # sudo handles the user context; parent can't chdir into 700 dirs
                 else:
                     shell_cmd = [os.environ.get("SHELL", "/bin/sh")]
