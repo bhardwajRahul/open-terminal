@@ -407,7 +407,7 @@ async def get_cwd(fs: UserFS = Depends(get_filesystem)):
     dependencies=[Depends(verify_api_key)],
 )
 async def set_cwd(request: MkdirRequest, fs: UserFS = Depends(get_filesystem)):
-    target = os.path.abspath(request.path)
+    target = fs.resolve_path(request.path)
     if fs.username:
         # In multi-user mode, cwd is per-user; don't touch the global server cwd.
         return {"cwd": target}
@@ -435,7 +435,7 @@ async def list_files(
     directory: str = Query(".", description="Directory path to list."),
     fs: UserFS = Depends(get_filesystem),
 ):
-    target = os.path.abspath(directory)
+    target = fs.resolve_path(directory)
     if not await fs.isdir(target):
         raise HTTPException(status_code=404, detail="Directory not found")
     entries = await fs.listdir(target)
@@ -464,7 +464,7 @@ async def read_file(
     ),
     fs: UserFS = Depends(get_filesystem),
 ):
-    target = os.path.abspath(path)
+    target = fs.resolve_path(path)
     if not await fs.isfile(target):
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -531,7 +531,7 @@ async def display_file(
     intercepting this response and presenting the file in its own UI (e.g.
     opening a preview pane, launching a viewer, etc.).
     """
-    target = os.path.abspath(path)
+    target = fs.resolve_path(path)
     exists = await fs.isfile(target)
     return {"path": target, "exists": exists}
 
@@ -550,7 +550,7 @@ async def view_file(
     Unlike read_file (which is designed for LLM consumption and restricts
     binary types), this endpoint serves any file as-is for UI previewing.
     """
-    target = os.path.abspath(path)
+    target = fs.resolve_path(path)
     if not await fs.isfile(target):
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -573,7 +573,7 @@ async def view_file(
     },
 )
 async def write_file(request: WriteRequest, fs: UserFS = Depends(get_filesystem)):
-    target = os.path.abspath(request.path)
+    target = fs.resolve_path(request.path)
     try:
         await fs.write(target, request.content)
     except (OSError, subprocess.CalledProcessError) as e:
@@ -587,7 +587,7 @@ async def write_file(request: WriteRequest, fs: UserFS = Depends(get_filesystem)
     dependencies=[Depends(verify_api_key)],
 )
 async def mkdir(request: MkdirRequest, fs: UserFS = Depends(get_filesystem)):
-    target = os.path.abspath(request.path)
+    target = fs.resolve_path(request.path)
     try:
         await fs.mkdir(target)
     except (OSError, subprocess.CalledProcessError) as e:
@@ -604,7 +604,7 @@ async def delete_entry(
     path: str = Query(..., description="Path to delete."),
     fs: UserFS = Depends(get_filesystem),
 ):
-    target = os.path.abspath(path)
+    target = fs.resolve_path(path)
     if not await fs.exists(target):
         raise HTTPException(status_code=404, detail="Path not found")
     is_dir = await fs.isdir(target)
@@ -621,8 +621,8 @@ async def delete_entry(
     dependencies=[Depends(verify_api_key)],
 )
 async def move_entry(request: MoveRequest, fs: UserFS = Depends(get_filesystem)):
-    source = os.path.abspath(request.source)
-    destination = os.path.abspath(request.destination)
+    source = fs.resolve_path(request.source)
+    destination = fs.resolve_path(request.destination)
 
     if not await fs.exists(source):
         raise HTTPException(status_code=404, detail="Source path not found")
@@ -654,7 +654,7 @@ async def move_entry(request: MoveRequest, fs: UserFS = Depends(get_filesystem))
     },
 )
 async def replace_file_content(request: ReplaceRequest, fs: UserFS = Depends(get_filesystem)):
-    target = os.path.abspath(request.path)
+    target = fs.resolve_path(request.path)
     if not await fs.isfile(target):
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -729,8 +729,9 @@ async def grep_search(
     max_results: int = Query(
         50, description="Maximum number of matches to return.", ge=1, le=500
     ),
+    fs: UserFS = Depends(get_filesystem),
 ):
-    target = os.path.abspath(path)
+    target = fs.resolve_path(path)
     if not await aiofiles.os.path.exists(target):
         raise HTTPException(status_code=404, detail="Search path not found")
 
@@ -826,8 +827,9 @@ async def glob_search(
     max_results: int = Query(
         50, description="Maximum number of matches to return.", ge=1, le=500
     ),
+    fs: UserFS = Depends(get_filesystem),
 ):
-    target = os.path.abspath(path)
+    target = fs.resolve_path(path)
     if not await aiofiles.os.path.isdir(target):
         raise HTTPException(status_code=404, detail="Search directory not found")
 
@@ -1000,7 +1002,7 @@ async def execute(
     ),
 ):
     fs = get_filesystem(http_request)
-    cwd = request.cwd or (fs.home if fs.username else None)
+    cwd = fs.resolve_path(request.cwd) if request.cwd else (fs.home if fs.username else None)
 
     subprocess_env = {**os.environ, **request.env} if request.env else None
     runner = await create_runner(

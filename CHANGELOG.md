@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.7] - 2026-03-11
+
+### Fixed
+
+- 🐛 **Multi-user relative path resolution** — relative paths (e.g. `abcdef.txt`, `.`) now resolve against the provisioned user's home directory instead of the server process's `/home/user`. All file, search, and execute endpoints use the new `UserFS.resolve_path()` method. ([#47](https://github.com/open-webui/open-terminal/issues/47))
+- 🔄 **Auto-swap `/home/user` paths** — in multi-user mode, absolute paths under `/home/user` are automatically rewritten to the provisioned user's home directory, handling LLMs that hardcode the default path from the system description.
+
 ## [0.11.6] - 2026-03-10
 
 ### Added
