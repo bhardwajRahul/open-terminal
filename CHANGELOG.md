@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.20] - 2026-03-15
+
+### Fixed
+
+- 👥 **Multi-user mode works when running as root** — `ensure_os_user()` no longer unconditionally requires `sudo`; when the process is already root (e.g. `user: "0:0"` in Docker Compose), user provisioning commands run directly. `check_environment()` now only requires `sudo` when not running as root, with an actionable error message pointing to the standard image or Terminals when neither root nor sudo is available. ([#60](https://github.com/open-webui/open-terminal/issues/60))
+
 ## [0.11.19] - 2026-03-15
 
 ### Fixed

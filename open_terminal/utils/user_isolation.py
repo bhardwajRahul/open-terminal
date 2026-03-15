@@ -21,24 +21,37 @@ log = logging.getLogger(__name__)
 _user_cache: dict[str, tuple[str, str]] = {}
 
 
+def _run_privileged(cmd: list[str]) -> subprocess.CompletedProcess:
+    """Run a command with appropriate privilege escalation.
+
+    When the process is already running as root (UID 0), the command is
+    executed directly.  Otherwise ``sudo`` is prepended.
+    """
+    if os.getuid() == 0:
+        return subprocess.run(cmd, check=True, capture_output=True)
+    return subprocess.run(["sudo", *cmd], check=True, capture_output=True)
+
+
 def check_environment() -> None:
     """Validate that the host supports multi-user mode.
 
     Raises ``RuntimeError`` at startup when the platform is not Linux or
-    ``sudo`` is not available.
+    the required privilege escalation tools are not available.
     """
     if platform.system() != "Linux":
         raise RuntimeError(
             "OPEN_TERMINAL_MULTI_USER requires Linux "
             f"(current platform: {platform.system()})"
         )
-    if shutil.which("sudo") is None:
-        raise RuntimeError(
-            "OPEN_TERMINAL_MULTI_USER requires sudo to be installed"
-        )
     if shutil.which("useradd") is None:
         raise RuntimeError(
             "OPEN_TERMINAL_MULTI_USER requires useradd to be installed"
+        )
+    if os.getuid() != 0 and shutil.which("sudo") is None:
+        raise RuntimeError(
+            "OPEN_TERMINAL_MULTI_USER requires either running as root "
+            "or sudo to be installed. Use the standard image, run with "
+            "user: '0:0', or use Terminals for container-per-user isolation."
         )
 
 
@@ -81,32 +94,16 @@ def ensure_os_user(username: str) -> str:
         pass  # User doesn't exist yet — create below
 
     log.info("Provisioning OS user: %s", username)
-    subprocess.run(
-        ["sudo", "useradd", "-m", "-s", "/bin/bash", username],
-        check=True,
-        capture_output=True,
-    )
+    _run_privileged(["useradd", "-m", "-s", "/bin/bash", username])
     home_dir = f"/home/{username}"
     # Fix ownership (home dir may pre-exist from a previous run with a
     # different UID assignment) and set permissions.
-    subprocess.run(
-        ["sudo", "chown", "-R", f"{username}:{username}", home_dir],
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["sudo", "chmod", "2770", home_dir],
-        check=True,
-        capture_output=True,
-    )
+    _run_privileged(["chown", "-R", f"{username}:{username}", home_dir])
+    _run_privileged(["chmod", "2770", home_dir])
     # Add the server process user to the new user's group so Python can
     # read files natively without subprocess.
     server_user = os.getenv("USER", "user")
-    subprocess.run(
-        ["sudo", "usermod", "-aG", username, server_user],
-        check=True,
-        capture_output=True,
-    )
+    _run_privileged(["usermod", "-aG", username, server_user])
     # Refresh the running process's supplementary group list so the new
     # group takes effect immediately (normally requires re-login).
     import ctypes
