@@ -1496,7 +1496,7 @@ if ENABLE_TERMINAL:
                 fs = get_filesystem(request)
 
                 # Use per-session cwd if available, else fall back to home
-                session_id = request.headers.get("x-session-id")
+                session_id = request.headers.get("x-session-id", session_id)
                 session_cwd = _get_session_cwd(session_id, fs) if session_id else None
 
                 if fs.username:
