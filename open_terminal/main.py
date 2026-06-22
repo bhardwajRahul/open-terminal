@@ -63,10 +63,33 @@ def get_system_info() -> str:
     )
 
 
+def _system_prompt_variables() -> dict[str, str]:
+    return {
+        "os": platform.system(),
+        "kernel": platform.release(),
+        "arch": platform.machine(),
+        "hostname": socket.gethostname(),
+        "user": "" if MULTI_USER else os.getenv("USER", "unknown"),
+        "shell": os.environ.get("SHELL", "/bin/sh"),
+        "python_version": sys.version.split()[0],
+        "home": os.path.expanduser("~"),
+    }
+
+
+def _expand_system_prompt_template(template: str) -> str:
+    values = _system_prompt_variables()
+
+    def replace(match: re.Match) -> str:
+        key = match.group(1).strip()
+        return values.get(key, match.group(0))
+
+    return re.sub(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", replace, template)
+
+
 def get_system_prompt() -> str:
     """Build a default system prompt for LLM integration."""
     if SYSTEM_PROMPT:
-        return SYSTEM_PROMPT
+        return _expand_system_prompt_template(SYSTEM_PROMPT)
 
     shell = os.environ.get("SHELL", "/bin/sh")
     user_part = f" as user '{os.getenv('USER', 'unknown')}'" if not MULTI_USER else ""
@@ -418,7 +441,7 @@ async def get_cwd(
     fs: UserFS = Depends(get_filesystem),
 ):
     session_id = http_request.headers.get("x-session-id")
-    return {"cwd": _get_session_cwd(session_id, fs)}
+    return {"cwd": _get_session_cwd(session_id, fs), "home": fs.home}
 
 
 @app.post(
@@ -1783,4 +1806,3 @@ if ENABLE_NOTEBOOKS:
     from open_terminal.utils.notebooks import create_notebooks_router
 
     app.include_router(create_notebooks_router(verify_api_key))
-
