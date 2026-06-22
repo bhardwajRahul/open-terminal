@@ -26,24 +26,28 @@ That's it — you're up and running at `http://localhost:8000`.
 
 #### Image Variants
 
-| | `latest` | `slim` | `alpine` |
-|---|---|---|---|
-| **Best for** | AI agent sandboxes | Production / hardened | Edge / CI / minimal footprint |
-| **Size** | ~4 GB | ~430 MB | ~230 MB |
-| **Bundled tooling** | Node.js, gcc, ffmpeg, LaTeX, Docker CLI, data science libs | git, curl, jq | git, curl, jq |
-| **Install packages at runtime** | ✔ (has `sudo`) | ✘ | ✘ |
-| **Multi-user mode** | ✔ | ✘ | ✘ |
-| **Egress firewall** | ✔ | ✔ | ✔ |
+| | `latest` | `slim` | `alpine` | `openshift` |
+|---|---|---|---|---|
+| **Best for** | AI agent sandboxes | Production / hardened | Edge / CI / minimal footprint | OpenShift restricted SCC |
+| **Size** | ~4 GB | ~430 MB | ~230 MB | ~430 MB |
+| **Bundled tooling** | Node.js, gcc, ffmpeg, LaTeX, Docker CLI, data science libs | git, curl, jq | git, curl, jq | git, curl, jq |
+| **Install packages at runtime** | ✔ (has `sudo`) | ✘ | ✘ | ✘ |
+| **Multi-user mode** | ✔ | ✘ | ✘ | ✘ |
+| **Egress firewall** | ✔ | ✔ | ✔ | ✘ |
 
 **`slim`** and **`alpine`** have the same feature set. Slim uses Debian (glibc) for broader binary compatibility; Alpine uses musl libc and is smaller, but some C-extension pip packages may need to compile from source.
 
 ```bash
 docker run -d -p 8000:8000 -e OPEN_TERMINAL_API_KEY=secret ghcr.io/open-webui/open-terminal:slim
 docker run -d -p 8000:8000 -e OPEN_TERMINAL_API_KEY=secret ghcr.io/open-webui/open-terminal:alpine
+docker run -d -p 8000:8000 -e OPEN_TERMINAL_API_KEY=secret ghcr.io/open-webui/open-terminal:openshift
 ```
 
 > [!NOTE]
 > Slim and Alpine don't support `OPEN_TERMINAL_PACKAGES` / `OPEN_TERMINAL_PIP_PACKAGES` / `OPEN_TERMINAL_NPM_PACKAGES`. To add packages, extend [Dockerfile.slim](Dockerfile.slim) or [Dockerfile.alpine](Dockerfile.alpine).
+
+> [!NOTE]
+> The OpenShift image is for restricted non-root pod policies. It does not support runtime package installs, Docker socket access, the iptables egress firewall, or `OPEN_TERMINAL_MULTI_USER=true`. Build a custom image ahead of time when OpenShift users need extra tools.
 
 #### Updating
 
